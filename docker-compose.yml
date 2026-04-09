@@ -1,0 +1,95 @@
+version: "3.9"
+
+services:
+  api:
+    image: python:3.11-slim
+    container_name: ai-benchmark-api
+    working_dir: /app
+    command: >
+      sh -c "pip install --no-cache-dir -r requirements.txt &&
+      uvicorn src.main:app --host 0.0.0.0 --port 8000"
+    ports:
+      - "8000:8000"
+    volumes:
+      - ./:/app
+    environment:
+      APP_ENV: local
+      LOG_LEVEL: INFO
+      DATABASE_URL: postgresql+psycopg2://postgres:postgres@postgres:5432/benchmark
+      REDIS_URL: redis://redis:6379/0
+      CELERY_BROKER_URL: redis://redis:6379/1
+      CELERY_RESULT_BACKEND: redis://redis:6379/2
+      LANGFUSE_PUBLIC_KEY: ${LANGFUSE_PUBLIC_KEY:-}
+      LANGFUSE_SECRET_KEY: ${LANGFUSE_SECRET_KEY:-}
+      LANGFUSE_HOST: ${LANGFUSE_HOST:-https://cloud.langfuse.com}
+      OPENAI_API_KEY: ${OPENAI_API_KEY:-}
+      GOOGLE_API_KEY: ${GOOGLE_API_KEY:-}
+    depends_on:
+      redis:
+        condition: service_healthy
+      postgres:
+        condition: service_healthy
+    healthcheck:
+      test: ["CMD", "python", "-c", "import urllib.request; urllib.request.urlopen('http://localhost:8000/health').read()"]
+      interval: 15s
+      timeout: 5s
+      retries: 5
+
+  worker:
+    image: python:3.11-slim
+    container_name: ai-benchmark-worker
+    working_dir: /app
+    command: >
+      sh -c "pip install --no-cache-dir -r requirements.txt &&
+      celery -A src.worker.celery_app worker --loglevel=INFO --concurrency=4"
+    volumes:
+      - ./:/app
+    environment:
+      APP_ENV: local
+      LOG_LEVEL: INFO
+      DATABASE_URL: postgresql+psycopg2://postgres:postgres@postgres:5432/benchmark
+      REDIS_URL: redis://redis:6379/0
+      CELERY_BROKER_URL: redis://redis:6379/1
+      CELERY_RESULT_BACKEND: redis://redis:6379/2
+      LANGFUSE_PUBLIC_KEY: ${LANGFUSE_PUBLIC_KEY:-}
+      LANGFUSE_SECRET_KEY: ${LANGFUSE_SECRET_KEY:-}
+      LANGFUSE_HOST: ${LANGFUSE_HOST:-https://cloud.langfuse.com}
+      OPENAI_API_KEY: ${OPENAI_API_KEY:-}
+      GOOGLE_API_KEY: ${GOOGLE_API_KEY:-}
+    depends_on:
+      redis:
+        condition: service_healthy
+      postgres:
+        condition: service_healthy
+
+  redis:
+    image: redis:7-alpine
+    container_name: ai-benchmark-redis
+    ports:
+      - "6379:6379"
+    command: ["redis-server", "--save", "60", "1", "--loglevel", "warning"]
+    healthcheck:
+      test: ["CMD", "redis-cli", "ping"]
+      interval: 10s
+      timeout: 3s
+      retries: 5
+
+  postgres:
+    image: postgres:16-alpine
+    container_name: ai-benchmark-postgres
+    ports:
+      - "5432:5432"
+    environment:
+      POSTGRES_USER: postgres
+      POSTGRES_PASSWORD: postgres
+      POSTGRES_DB: benchmark
+    volumes:
+      - postgres_data:/var/lib/postgresql/data
+    healthcheck:
+      test: ["CMD-SHELL", "pg_isready -U postgres -d benchmark"]
+      interval: 10s
+      timeout: 5s
+      retries: 5
+
+volumes:
+  postgres_data:
